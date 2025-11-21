@@ -246,16 +246,25 @@
             messagesContainer.innerHTML = '<div class="text-center text-gray-500 mt-20">Загрузка сообщений...</div>';
 
             // 1. Setup Real-time Listener for Messages
-            // Внимание: 'orderBy' может потребовать индекса в Firestore
-            const q = query(chatCollectionRef, orderBy('timestamp'));
+            // FIX: Убрали orderBy, чтобы избежать ошибок индексации Firestore. Сортируем на стороне клиента.
+            const q = query(chatCollectionRef);
 
             unsubscribeMessages = onSnapshot(q, (snapshot) => {
-                let messagesHtml = '';
-                let hasMessages = false;
-
+                const messagesData = [];
                 snapshot.forEach((doc) => {
-                    hasMessages = true;
-                    const msg = doc.data();
+                    messagesData.push(doc.data());
+                });
+
+                // Client-side sorting: By timestamp (oldest first).
+                // Messages with pending serverTimestamp (null) are pushed to the end (timestamp.seconds is 0).
+                messagesData.sort((a, b) => {
+                    const timeA = a.timestamp?.seconds || 0;
+                    const timeB = b.timestamp?.seconds || 0;
+                    return timeA - timeB;
+                });
+
+                let messagesHtml = '';
+                messagesData.forEach((msg) => {
                     const isSender = msg.senderId === userId;
                     messagesHtml += createMessageBubble(msg.text, isSender, msg.timestamp);
                 });
@@ -282,7 +291,9 @@
             const message = {
                 text: text,
                 senderId: userId,
-                timestamp: serverTimestamp() // Use server timestamp for ordering
+                // Используем serverTimestamp. При считывании на стороне клиента, пока временная метка
+                // не установлена, она будет null, что обрабатывается в функции сортировки.
+                timestamp: serverTimestamp() 
             };
 
             try {
@@ -298,6 +309,8 @@
 
         // Creates the styled message bubble HTML
         const createMessageBubble = (text, isSender, timestamp) => {
+            // Преобразование временной метки. Если временная метка еще не установлена сервером (pending), 
+            // используем заглушку '...'
             const time = timestamp ? new Date(timestamp.seconds * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '...';
             const bgColor = isSender ? 'bg-blue-500 text-white' : 'bg-white text-gray-800 border border-gray-200 shadow-md';
             const alignment = isSender ? 'self-end' : 'self-start';
