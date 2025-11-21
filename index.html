@@ -122,13 +122,18 @@
         // === ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И НАСТРОЙКИ ===
         
         // Конфигурация Firebase
+        // !!! ВАЖНО: Вы получили ошибку (auth/configuration-not-found). 
+        // Это означает, что эти настройки могут быть неверны ИЛИ Анонимная Аутентификация
+        // не включена в вашем проекте Firebase (Настройки -> Authentication -> Sign-in method -> Anonymous).
         const VERCEL_FIREBASE_CONFIG = {
-            apiKey: "AIzaSyAemRqS-QxuehmOvpKfZaUqEvY0vEANH_o",
+            apiKey: "AIzaSyAemRqS-QxuehmOvpKfZaUqEvY0vEANH_o", // Проверьте этот ключ в Настройках проекта
             authDomain: "mesengergrok.firebaseapp.com",
-            projectId: "mesengergrok",
+            databaseURL: "https://mesengergrok-default-rtdb.firebaseio.com", // НОВАЯ СТРОКА
+            projectId: "mesengergrok", // Проверьте этот ID
             storageBucket: "mesengergrok.firebasestorage.app",
             messagingSenderId: "610820074834",
-            appId: "1:610820074834:web:49c2279bf53f9338f01e8b"
+            appId: "1:610820074834:web:49c2279bf53f9338f01e8b",
+            measurementId: "G-B0NMTXH6HK" // НОВАЯ СТРОКА
         };
 
         // Глобальные переменные среды Canvas (если существуют)
@@ -213,7 +218,8 @@
                             }
                         } catch (error) {
                             console.error("Firebase Auth Error:", error);
-                            setLoadingState('Ошибка авторизации. Проверьте консоль.', false);
+                            // !!! ЭТА ОШИБКА: (auth/configuration-not-found) !!! 
+                            setLoadingState('Ошибка авторизации. Проверьте настройки Firebase (ключи/включена ли Анонимная Auth).', false);
                         }
                     }
                 });
