@@ -1,1 +1,354 @@
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, doc, setDoc } from 'firebase/firestore';
+import { Send, User, MessageSquare } from 'lucide-react';
 
+// === FIREBASE & ENVIRONMENT SETUP ===
+
+// 1. КОНФИГУРАЦИЯ ДЛЯ ВНЕШНЕГО РАЗВЕРТЫВАНИЯ (НАПРИМЕР, VERCEL)
+// !!! ВАЖНО: ЭТИ ПАРАМЕТРЫ БЫЛИ ОБНОВЛЕНЫ ВАШИМИ ДАННЫМИ FIREBASE !!!
+const VERCEL_FIREBASE_CONFIG = {
+    apiKey: "AIzaSyAemRqS-QxuehmOvpKfZaUqEvY0vEANH_o",
+    authDomain: "mesengergrok.firebaseapp.com",
+    projectId: "mesengergrok",
+    storageBucket: "mesengergrok.firebasestorage.app",
+    messagingSenderId: "610820074834",
+    appId: "1:610820074834:web:49c2279bf53f9338f01e8b"
+};
+
+// Переменные из текущей среды Canvas (будут undefined на Vercel)
+const canvasFirebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+const canvasAppId = typeof __app_id !== 'undefined' ? __app_id : 'messenger-app-v1';
+
+// Utility function to deterministically generate a chat ID from two user IDs
+const getChatId = (u1, u2) => [u1, u2].sort().join('___');
+
+// Main App Component
+const App = () => {
+    // Firebase States
+    const [db, setDb] = useState(null);
+    const [auth, setAuth] = useState(null);
+    const [userId, setUserId] = useState(null);
+    const [isAuthReady, setIsAuthReady] = useState(false);
+    const [loadingMessage, setLoadingMessage] = useState('Подключение к сервисам...');
+
+    // Messenger States
+    const [currentChatId, setCurrentChatId] = useState(null);
+    const [recipientId, setRecipientId] = useState('');
+    const [messages, setMessages] = useState([]);
+    const [newMessageText, setNewMessageText] = useState('');
+    const [contacts, setContacts] = useState([]); // List of user IDs you have chatted with
+    const messagesEndRef = useRef(null);
+    const [chatError, setChatError] = useState(null); // НОВЫЙ СТЕЙТ для отображения ошибок чата
+
+    // --- 1. INITIALIZATION AND AUTHENTICATION ---
+    useEffect(() => {
+        // Определяем, какую конфигурацию использовать (Canvas или Vercel/Внешнюю)
+        const configToUse = canvasFirebaseConfig || VERCEL_FIREBASE_CONFIG;
+        const finalAppId = canvasAppId; // Используем appId из Canvas или заглушку
+
+        // Проверка: теперь она должна проходить, так как данные заполнены
+        if (!configToUse.apiKey || configToUse.apiKey.includes('ВАШ_')) {
+            setLoadingMessage('Ошибка: Необходима конфигурация Firebase. Заполните VERCEL_FIREBASE_CONFIG.');
+            return;
+        }
+
+        const app = initializeApp(configToUse);
+        const firestore = getFirestore(app);
+        const firebaseAuth = getAuth(app);
+        setDb(firestore);
+        setAuth(firebaseAuth);
+
+        const unsubscribeAuth = onAuthStateChanged(firebaseAuth, async (user) => {
+            if (user) {
+                setUserId(user.uid);
+                setIsAuthReady(true);
+                setLoadingMessage('Авторизация успешна. Загрузка чатов...');
+                
+                // Путь к коллекции публичных данных (используем finalAppId)
+                const userDocRef = doc(firestore, `artifacts/${finalAppId}/public/data/users`, user.uid);
+                await setDoc(userDocRef, { 
+                    lastActive: serverTimestamp(),
+                    displayName: `Пользователь ${user.uid.substring(0, 6)}`
+                }, { merge: true });
+
+            } else {
+                // Попытка входа: сначала через специальный токен (для Canvas), затем анонимно (для Vercel/других)
+                try {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(firebaseAuth, initialAuthToken);
+                    } else {
+                        // Стандартный анонимный вход для внешнего развертывания
+                        await signInAnonymously(firebaseAuth);
+                    }
+                } catch (error) {
+                    console.error("Firebase Auth Error:", error);
+                    setLoadingMessage('Ошибка авторизации. Проверьте консоль.');
+                }
+            }
+        });
+
+        return () => unsubscribeAuth();
+    }, [canvasFirebaseConfig, initialAuthToken]); // Зависимости обновлены
+
+    // --- 2. CONTACTS / THREADS LISTENER (Simplified) ---
+    // In a real app, this would query a 'threads' collection where the userId is a member.
+    // Here, we'll manually add the current recipient to the contact list if a chat starts.
+    useEffect(() => {
+        if (userId && recipientId && !contacts.includes(recipientId)) {
+            setContacts(prev => [...new Set([...prev, recipientId])]);
+        }
+    }, [userId, recipientId]);
+
+    // --- 3. MESSAGES REAL-TIME LISTENER ---
+    useEffect(() => {
+        const finalAppId = canvasAppId; // Используем appId из Canvas или заглушку
+        
+        if (!isAuthReady || !db || !currentChatId) return;
+
+        setMessages([]);
+        setLoadingMessage('Загрузка сообщений...');
+
+        // Collection path for public, shared chat data
+        const chatPath = `artifacts/${finalAppId}/public/data/threads/${currentChatId}/messages`;
+        const messagesRef = collection(db, chatPath);
+        
+        // Query ordered by timestamp
+        const messagesQuery = query(messagesRef, orderBy('timestamp', 'asc'));
+
+        const unsubscribeMessages = onSnapshot(messagesQuery, (snapshot) => {
+            const newMessages = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data(),
+            }));
+            setMessages(newMessages);
+            setLoadingMessage(null);
+        }, (error) => {
+            console.error("Firestore Snapshot Error:", error);
+            setLoadingMessage('Ошибка загрузки сообщений. Проверьте правила безопасности.');
+        });
+
+        // Cleanup function for the listener
+        return () => unsubscribeMessages();
+    }, [isAuthReady, db, currentChatId]);
+
+    // --- 4. SCROLL TO BOTTOM ---
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [messages]);
+
+    // --- 5. HANDLERS ---
+    const handleSelectChat = (friendId) => {
+        if (friendId === userId) return; // Cannot chat with self
+        setRecipientId(friendId);
+        setCurrentChatId(getChatId(userId, friendId));
+        setChatError(null); // Очищаем ошибку при выборе нового чата
+    };
+
+    const handleStartNewChat = () => {
+        if (!recipientId || recipientId.trim() === userId) {
+            const errorMessage = recipientId.trim() === userId 
+                ? 'Вы не можете начать чат с самим собой.' 
+                : 'Пожалуйста, введите корректный ID друга.';
+                
+            setChatError(errorMessage);
+            // Автоматически скрываем ошибку через 3 секунды
+            setTimeout(() => setChatError(null), 3000); 
+            // УДАЛЕНО: console.error('Пожалуйста, введите корректный ID друга.');
+            return;
+        }
+        handleSelectChat(recipientId.trim());
+    };
+
+    const handleSendMessage = async (e) => {
+        const finalAppId = canvasAppId;
+        e.preventDefault();
+        if (!newMessageText.trim() || !currentChatId || !db) return;
+
+        const chatPath = `artifacts/${finalAppId}/public/data/threads/${currentChatId}/messages`;
+
+        try {
+            await addDoc(collection(db, chatPath), {
+                senderId: userId,
+                text: newMessageText.trim(),
+                timestamp: serverTimestamp(),
+            });
+            setNewMessageText('');
+        } catch (error) {
+            console.error("Error sending message:", error);
+            // In a real app, show a friendly error message
+        }
+    };
+
+    // --- 6. RENDER COMPONENTS ---
+
+    // Loading/Error Screen
+    if (!isAuthReady || !userId) {
+        return (
+            <div className="flex items-center justify-center min-h-screen bg-gray-900 text-white p-4">
+                <div className="text-center">
+                    <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500 mx-auto"></div>
+                    <p className="mt-4 text-lg">{loadingMessage}</p>
+                </div>
+            </div>
+        );
+    }
+
+    const currentRecipient = contacts.find(c => getChatId(userId, c) === currentChatId);
+
+    const ChatSidebar = () => (
+        <div className="w-full md:w-1/3 lg:w-1/4 bg-gray-800 border-r border-gray-700 flex flex-col">
+            <div className="p-4 border-b border-gray-700">
+                <h2 className="text-xl font-bold text-white mb-1 flex items-center">
+                    <MessageSquare className="mr-2 h-5 w-5 text-blue-400" />
+                    Мессенджер
+                </h2>
+                <div className="text-sm text-gray-400 truncate">Ваш ID: <span className="font-mono text-blue-300 select-all">{userId}</span></div>
+            </div>
+
+            {/* New Chat Input */}
+            <div className="p-4 bg-gray-900">
+                {/* Визуальное отображение ошибки чата */}
+                {chatError && (
+                    <div className="p-2 mb-2 text-sm font-medium text-red-100 bg-red-600 rounded-lg transition duration-300 animate-pulse">
+                        {chatError}
+                    </div>
+                )}
+                <input
+                    type="text"
+                    placeholder="ID друга для чата..."
+                    value={recipientId}
+                    onChange={(e) => setRecipientId(e.target.value)}
+                    className="w-full p-2 mb-2 bg-gray-700 text-white rounded-lg focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400"
+                />
+                <button
+                    onClick={handleStartNewChat}
+                    className="w-full p-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-md transition duration-150"
+                >
+                    <div className='flex items-center justify-center'>
+                      <User className="mr-2 h-4 w-4" /> Начать Чат
+                    </div>
+                </button>
+            </div>
+
+            {/* Contacts List */}
+            <div className="flex-grow overflow-y-auto">
+                <div className="p-4 text-gray-400 font-semibold uppercase text-xs tracking-wider">
+                    Активные чаты
+                </div>
+                {contacts.filter(c => c !== userId).map((contact) => (
+                    <div
+                        key={contact}
+                        onClick={() => handleSelectChat(contact)}
+                        className={`p-3 mx-2 rounded-xl cursor-pointer transition duration-150 ${currentChatId === getChatId(userId, contact) 
+                            ? 'bg-blue-600 shadow-lg text-white font-semibold' 
+                            : 'hover:bg-gray-700 text-gray-300'
+                        }`}
+                    >
+                        <div className="font-medium truncate">
+                            {/* Display friend's ID */}
+                            <span className="text-sm">Чат с: {contact.substring(0, 8)}...</span>
+                        </div>
+                        {currentChatId === getChatId(userId, contact) && (
+                            <div className="text-xs opacity-80">Активен</div>
+                        )}
+                    </div>
+                ))}
+            </div>
+        </div>
+    );
+
+    const ChatWindow = () => (
+        <div className="flex-grow flex flex-col bg-gray-900">
+            {/* Header */}
+            <div className="p-4 border-b border-gray-700 bg-gray-800 shadow-md">
+                <h3 className="text-xl font-semibold text-white">
+                    {currentChatId ? `Чат с: ${currentRecipient?.substring(0, 10)}...` : 'Выберите чат'}
+                </h3>
+            </div>
+
+            {/* Messages Area */}
+            <div className="flex-grow overflow-y-auto p-4 space-y-4">
+                {!currentChatId ? (
+                    <div className="flex items-center justify-center h-full text-gray-500 text-lg">
+                        <p>Выберите друга в меню слева или введите его ID, чтобы начать переписку.</p>
+                    </div>
+                ) : loadingMessage ? (
+                    <div className="text-center text-gray-500 mt-10">{loadingMessage}</div>
+                ) : (
+                    messages.map((msg) => {
+                        const isMyMessage = msg.senderId === userId;
+                        const time = msg.timestamp?.toDate ? msg.timestamp.toDate().toLocaleTimeString('ru-RU', {hour: '2-digit', minute:'2-digit'}) : '...';
+                        
+                        return (
+                            <div key={msg.id} className={`flex ${isMyMessage ? 'justify-end' : 'justify-start'}`}>
+                                <div className={`max-w-xs sm:max-w-md p-3 rounded-2xl shadow-lg relative ${isMyMessage 
+                                    ? 'bg-blue-600 text-white rounded-br-none' 
+                                    : 'bg-gray-700 text-white rounded-tl-none'
+                                }`}>
+                                    <p className="text-sm break-words">{msg.text}</p>
+                                    <div className={`text-xs mt-1 ${isMyMessage ? 'text-blue-200' : 'text-gray-400'} text-right`}>
+                                        {time}
+                                    </div>
+                                </div>
+                            </div>
+                        );
+                    })
+                )}
+                <div ref={messagesEndRef} />
+            </div>
+
+            {/* Input Area */}
+            {currentChatId && (
+                <div className="p-4 border-t border-gray-700 bg-gray-800">
+                    <form onSubmit={handleSendMessage} className="flex space-x-3">
+                        <input
+                            type="text"
+                            value={newMessageText}
+                            onChange={(e) => setNewMessageText(e.target.value)}
+                            placeholder="Введите сообщение..."
+                            className="flex-grow p-3 bg-gray-700 text-white rounded-full focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400 border-none outline-none transition duration-150"
+                            disabled={!currentChatId}
+                        />
+                        <button
+                            type="submit"
+                            disabled={!currentChatId || !newMessageText.trim()}
+                            className="bg-blue-600 hover:bg-blue-700 p-3 rounded-full text-white font-semibold shadow-xl transition duration-150 disabled:bg-gray-600 disabled:cursor-not-allowed"
+                        >
+                            <Send className="h-5 w-5" />
+                        </button>
+                    </form>
+                </div>
+            )}
+        </div>
+    );
+
+
+    return (
+        <div className="flex h-screen bg-gray-900 text-white font-sans">
+            <style>{`
+                /* Стилизация полосы прокрутки для Webkit */
+                ::-webkit-scrollbar {
+                    width: 8px;
+                }
+                ::-webkit-scrollbar-thumb {
+                    background: #3B82F6; /* Синий цвет Tailwind-blue-500 */
+                    border-radius: 10px;
+                }
+                ::-webkit-scrollbar-track {
+                    background: #1F2937; /* Темный цвет Tailwind-gray-800 */
+                }
+            `}</style>
+            
+            {/* Sidebar (Contacts) */}
+            <ChatSidebar />
+
+            {/* Main Chat Window */}
+            <ChatWindow />
+        </div>
+    );
+};
+
+export default App;
