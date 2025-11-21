@@ -1,1 +1,389 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Крутой Мессенджер</title>
+    <!-- Подключение Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Настройка шрифта Inter -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f0f2f5; /* Светло-серый фон */
+        }
+    </style>
+</head>
+<body>
 
+    <div id="app" class="min-h-screen flex items-center justify-center p-4">
+        <div id="loading-overlay" class="fixed inset-0 bg-white bg-opacity-75 flex items-center justify-center z-50">
+            <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+            <p class="ml-4 text-blue-600">Загрузка и авторизация...</p>
+        </div>
+
+        <!-- Main Messenger Container -->
+        <div id="messenger-container" class="hidden w-full max-w-4xl h-[90vh] bg-white rounded-xl shadow-2xl flex flex-col md:flex-row overflow-hidden transition-all duration-300">
+
+            <!-- Sidebar (User Info & Friend Select) -->
+            <div class="md:w-1/3 p-4 bg-gray-50 border-r border-gray-200 flex flex-col">
+                <h1 class="text-2xl font-bold text-gray-800 mb-6 border-b pb-3">Мессенджер 🚀</h1>
+
+                <!-- Current User Info -->
+                <div class="bg-blue-100 p-3 rounded-lg mb-6 shadow-inner">
+                    <p class="text-sm font-semibold text-blue-700">Ваш ID (поделитесь с другом):</p>
+                    <div class="flex items-center mt-1">
+                        <span id="current-user-id" class="text-xs break-all font-mono text-blue-900 bg-blue-200 px-2 py-1 rounded">Загрузка...</span>
+                        <button onclick="copyUserId()" class="ml-2 p-1 bg-blue-500 hover:bg-blue-600 text-white rounded-full text-xs transition">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                                <path d="M7 9a2 2 0 012-2h6a2 2 0 012 2v6a2 2 0 01-2 2H9a2 2 0 01-2-2V9z" />
+                                <path d="M5 3a2 2 0 00-2 2v6a2 2 0 002 2h2V5a2 2 0 012-2h6a2 2 0 00-2-2H5z" />
+                            </svg>
+                        </button>
+                    </div>
+                    <div id="copy-message" class="text-xs text-green-600 mt-2 hidden">ID скопирован!</div>
+                </div>
+
+                <!-- Friend ID Input -->
+                <div class="mb-4">
+                    <label for="friend-id" class="block text-sm font-medium text-gray-700 mb-2">ID пользователя друга:</label>
+                    <input type="text" id="friend-id" placeholder="Введите ID друга..."
+                           class="w-full p-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 transition duration-150">
+                    <button id="start-chat-btn"
+                            class="mt-3 w-full bg-indigo-600 text-white p-2 rounded-lg font-semibold hover:bg-indigo-700 transition shadow-md">
+                        Начать чат
+                    </button>
+                </div>
+
+                <!-- Active Chat List (Placeholder/Future Feature) -->
+                <div class="flex-grow overflow-y-auto">
+                    <h3 class="text-lg font-semibold text-gray-800 mb-2">Ваши чаты:</h3>
+                    <div id="chat-list" class="space-y-2">
+                        <!-- Current friend's name will appear here -->
+                        <div id="active-chat-card" class="hidden p-3 bg-white border border-indigo-200 rounded-lg cursor-pointer hover:bg-indigo-50 transition">
+                            <p class="font-medium text-indigo-700">Чат с: <span id="current-friend-display"></span></p>
+                            <p class="text-xs text-gray-500 mt-1">Нажмите, чтобы открыть.</p>
+                        </div>
+                        <p id="no-chat-prompt" class="text-sm text-gray-500 p-2">
+                            Введите ID друга, чтобы начать.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Chat Window -->
+            <div id="chat-window" class="md:w-2/3 flex flex-col">
+                <div id="chat-header" class="p-4 bg-white border-b border-gray-200 flex items-center justify-between shadow-sm">
+                    <h2 id="chat-title" class="text-xl font-semibold text-gray-800">Выберите чат</h2>
+                </div>
+
+                <!-- Messages Area -->
+                <div id="messages-container" class="flex-grow p-4 space-y-4 overflow-y-auto bg-gray-50">
+                    <div class="text-center text-gray-500 mt-20">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 mx-auto text-indigo-300" viewBox="0 0 20 20" fill="currentColor">
+                            <path fill-rule="evenodd" d="M18 10c0 3.866-3.582 7-8 7a8.841 8.841 0 01-4.76-1.39A6.456 6.456 0 005 13H4a2 2 0 00-2 2v1a1 1 0 01-2 0v-1a4 4 0 014-4h.577zm-1.76-7.859c-.494-.038-.97-.04-1.428.016-1.579.19-3.23.87-4.732 1.838A8 8 0 0010 2C5.582 2 2 5.134 2 9c0 .76.136 1.48.38 2.146.126.347.28.675.45.986l1.248.832A8.964 8.964 0 0110 17c4.418 0 8-3.134 8-7 0-3.866-3.582-7-8-7z" clip-rule="evenodd" />
+                        </svg>
+                        <p class="mt-2 text-lg">Начните общение с другом!</p>
+                    </div>
+                </div>
+
+                <!-- Message Input -->
+                <div id="input-area" class="p-4 bg-white border-t border-gray-200 hidden">
+                    <div class="flex">
+                        <input type="text" id="message-input" placeholder="Напишите сообщение..."
+                               class="flex-grow p-3 border border-gray-300 rounded-l-xl focus:ring-blue-500 focus:border-blue-500 transition duration-150 shadow-inner"
+                               onkeypress="if(event.key === 'Enter') sendMessage()">
+                        <button id="send-btn" onclick="sendMessage()"
+                                class="bg-blue-600 text-white p-3 rounded-r-xl font-semibold hover:bg-blue-700 transition shadow-lg flex items-center justify-center">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6 transform rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase Imports and Logic -->
+    <script type="module">
+        // --- Firebase Imports ---
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, setPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, addDoc, onSnapshot, collection, query, orderBy, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Global state
+        let app, db, auth;
+        let userId = null;
+        let currentFriendId = null;
+        let unsubscribeMessages = null;
+
+        // Mandatorily provided global variables
+        // Используем ID приложения Canvas для создания пути к Firestore
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        
+        // === UPDATED: Using user-provided Firebase configuration ===
+        const firebaseConfig = {
+            apiKey: "AIzaSyAemRqS-QxuehmOvpKfZaUqEvY0vEANH_o",
+            authDomain: "mesengergrok.firebaseapp.com",
+            databaseURL: "https://mesengergrok-default-rtdb.firebaseio.com",
+            projectId: "mesengergrok",
+            storageBucket: "mesengergrok.firebasestorage.app",
+            messagingSenderId: "610820074834",
+            appId: "1:610820074834:web:49c2279bf53f9338f01e8b",
+            measurementId: "G-B0NMTXH6HK"
+        };
+        // === END UPDATE ===
+
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        const loadingOverlay = document.getElementById('loading-overlay');
+        const messengerContainer = document.getElementById('messenger-container');
+        const currentUserIdDisplay = document.getElementById('current-user-id');
+        const friendIdInput = document.getElementById('friend-id');
+        const startChatBtn = document.getElementById('start-chat-btn');
+        const messagesContainer = document.getElementById('messages-container');
+        const messageInput = document.getElementById('message-input');
+        const inputArea = document.getElementById('input-area');
+        const chatTitle = document.getElementById('chat-title');
+        const activeChatCard = document.getElementById('active-chat-card');
+        const currentFriendDisplay = document.getElementById('current-friend-display');
+        const noChatPrompt = document.getElementById('no-chat-prompt');
+
+        // Firestore paths utility
+        const getChatCollectionPath = (chatId) => {
+            // Public path for collaborative/shared data
+            return `/artifacts/${appId}/public/data/chats/${chatId}/messages`;
+        };
+
+        // Function to create a unique, stable chatId for two users
+        const getChatId = (userA, userB) => {
+            // Sort the IDs alphabetically to ensure the chatId is the same regardless of who initiates
+            const sortedIds = [userA, userB].sort();
+            return sortedIds.join('_');
+        };
+
+        // --- Firebase Initialization and Auth ---
+        try {
+            // setLogLevel('debug'); // Uncomment for detailed debug logs
+            app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+
+            // Persist session to avoid signing in repeatedly on reload
+            await setPersistence(auth, browserSessionPersistence);
+
+            // FIX: Since a custom firebaseConfig is used, the Canvas-provided __initial_auth_token is invalid 
+            // and causes the 'auth/custom-token-mismatch' error. We must use anonymous sign-in instead.
+            if (initialAuthToken) {
+                 console.warn("Предупреждение: __initial_auth_token игнорируется, так как используется пользовательская конфигурация Firebase. Используется анонимный вход.");
+            }
+            await signInAnonymously(auth);
+
+        } catch (error) {
+            console.error("Firebase initialization or sign-in failed:", error);
+            loadingOverlay.innerHTML = '<p class="text-red-600">Ошибка инициализации Firebase. Проверьте консоль.</p>';
+        }
+
+        // Listener for authentication state changes
+        onAuthStateChanged(auth, (user) => {
+            if (user) {
+                userId = user.uid;
+                currentUserIdDisplay.textContent = userId;
+                loadingOverlay.classList.add('hidden');
+                messengerContainer.classList.remove('hidden');
+                console.log("Authenticated with userId:", userId);
+
+                // Check for a pending friend ID from a previous session or URL (optional)
+                const storedFriendId = sessionStorage.getItem('currentFriendId');
+                if (storedFriendId && storedFriendId !== userId) {
+                    friendIdInput.value = storedFriendId;
+                    startChat(storedFriendId);
+                }
+
+            } else {
+                // Should not happen if signInAnonymously is successful, but good practice
+                userId = null;
+                currentUserIdDisplay.textContent = 'Недоступно';
+                loadingOverlay.innerHTML = '<p class="text-red-600">Ошибка: Пользователь не авторизован.</p>';
+            }
+        });
+
+        // --- Firestore Real-time Messaging ---
+
+        const startChat = (friendId) => {
+            if (!userId) {
+                console.error("User not authenticated yet.");
+                return;
+            }
+            if (friendId === userId) {
+                alertUser('Нельзя начать чат с самим собой!', 'red');
+                return;
+            }
+            if (!friendId) {
+                alertUser('Введите ID пользователя друга.', 'red');
+                return;
+            }
+
+            // Clean up previous listener if it exists
+            if (unsubscribeMessages) {
+                unsubscribeMessages();
+                unsubscribeMessages = null;
+            }
+
+            currentFriendId = friendId;
+            sessionStorage.setItem('currentFriendId', currentFriendId);
+            const chatId = getChatId(userId, currentFriendId);
+            const chatCollectionRef = collection(db, getChatCollectionPath(chatId));
+
+            // Update UI for the new chat
+            chatTitle.textContent = `Чат с: ${currentFriendId}`;
+            currentFriendDisplay.textContent = currentFriendId;
+            activeChatCard.classList.remove('hidden');
+            noChatPrompt.classList.add('hidden');
+            inputArea.classList.remove('hidden');
+            messagesContainer.innerHTML = '<div class="text-center text-gray-500 mt-20">Загрузка сообщений...</div>';
+
+            // 1. Setup Real-time Listener for Messages
+            // Внимание: 'orderBy' может потребовать индекса в Firestore
+            const q = query(chatCollectionRef, orderBy('timestamp'));
+
+            unsubscribeMessages = onSnapshot(q, (snapshot) => {
+                let messagesHtml = '';
+                let hasMessages = false;
+
+                snapshot.forEach((doc) => {
+                    hasMessages = true;
+                    const msg = doc.data();
+                    const isSender = msg.senderId === userId;
+                    messagesHtml += createMessageBubble(msg.text, isSender, msg.timestamp);
+                });
+
+                messagesContainer.innerHTML = messagesHtml || '<div class="text-center text-gray-500 mt-20">Сообщений пока нет. Начните чат!</div>';
+
+                // Auto-scroll to the bottom of the messages container
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            }, (error) => {
+                console.error("Error listening to messages:", error);
+                messagesContainer.innerHTML = '<div class="text-center text-red-500 mt-20">Ошибка загрузки сообщений.</div>';
+            });
+        };
+
+        // 2. Send Message Function
+        window.sendMessage = async () => {
+            const text = messageInput.value.trim();
+
+            if (!text || !currentFriendId || !userId) return;
+
+            const chatId = getChatId(userId, currentFriendId);
+            const chatCollectionRef = collection(db, getChatCollectionPath(chatId));
+
+            const message = {
+                text: text,
+                senderId: userId,
+                timestamp: serverTimestamp() // Use server timestamp for ordering
+            };
+
+            try {
+                await addDoc(chatCollectionRef, message);
+                messageInput.value = ''; // Clear input on success
+            } catch (error) {
+                console.error("Error sending message:", error);
+                alertUser('Ошибка отправки сообщения.', 'red');
+            }
+        };
+
+        // --- UI Utility Functions ---
+
+        // Creates the styled message bubble HTML
+        const createMessageBubble = (text, isSender, timestamp) => {
+            const time = timestamp ? new Date(timestamp.seconds * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '...';
+            const bgColor = isSender ? 'bg-blue-500 text-white' : 'bg-white text-gray-800 border border-gray-200 shadow-md';
+            const alignment = isSender ? 'self-end' : 'self-start';
+            const borderRadius = isSender ? 'rounded-b-xl rounded-tl-xl' : 'rounded-b-xl rounded-tr-xl';
+
+            return `
+                <div class="flex flex-col ${alignment} max-w-xs sm:max-w-md">
+                    <div class="p-3 ${bgColor} ${borderRadius} inline-block break-words">
+                        <p class="text-sm">${text}</p>
+                        <span class="block text-right text-xs mt-1 opacity-75">${time}</span>
+                    </div>
+                </div>
+            `;
+        };
+
+        // Custom alert/message box (replacing forbidden 'alert()')
+        const alertUser = (message, color = 'blue') => {
+            const notification = document.createElement('div');
+            const colorClass = {
+                'blue': 'bg-blue-100 border-blue-500 text-blue-700',
+                'red': 'bg-red-100 border-red-500 text-red-700',
+                'green': 'bg-green-100 border-green-500 text-green-700',
+            }[color];
+
+            notification.className = `fixed top-4 right-4 p-4 rounded-lg shadow-xl border-l-4 z-[100] ${colorClass} transition-opacity duration-300 opacity-0`;
+            notification.textContent = message;
+
+            document.body.appendChild(notification);
+
+            // Animate in and out
+            setTimeout(() => {
+                notification.style.opacity = '1';
+            }, 10);
+
+            setTimeout(() => {
+                notification.style.opacity = '0';
+                notification.addEventListener('transitionend', () => notification.remove());
+            }, 4000);
+        };
+
+        // Copy User ID function
+        window.copyUserId = () => {
+            const idText = currentUserIdDisplay.textContent;
+            if (idText === 'Загрузка...' || idText === 'Недоступно') return;
+
+            // Use execCommand('copy') as navigator.clipboard may not work in iframes
+            const tempInput = document.createElement("textarea");
+            tempInput.value = idText;
+            document.body.appendChild(tempInput);
+            tempInput.select();
+            document.execCommand('copy');
+            document.body.removeChild(tempInput);
+
+            const copyMessage = document.getElementById('copy-message');
+            copyMessage.classList.remove('hidden');
+            setTimeout(() => {
+                copyMessage.classList.add('hidden');
+            }, 2000);
+        };
+
+        // --- Event Listeners ---
+        startChatBtn.addEventListener('click', () => {
+            const friendId = friendIdInput.value.trim();
+            if (friendId) {
+                startChat(friendId);
+            }
+        });
+
+        activeChatCard.addEventListener('click', () => {
+            // Re-select the friend if the card is clicked
+            if (currentFriendId) {
+                friendIdInput.value = currentFriendId;
+                startChat(currentFriendId);
+            }
+        });
+
+        // Handle Enter key on friend ID input
+        friendIdInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                const friendId = friendIdInput.value.trim();
+                if (friendId) {
+                    startChat(friendId);
+                }
+            }
+        });
+
+    </script>
+</body>
+</html>
