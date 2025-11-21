@@ -115,25 +115,23 @@
 
     <!-- MAIN JAVASCRIPT LOGIC -->
     <script type="module">
+        // Добавлен setLogLevel в импорт
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, addDoc, setDoc, onSnapshot, collection, query, orderBy, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, addDoc, setDoc, onSnapshot, collection, query, orderBy, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // === ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И НАСТРОЙКИ ===
         
         // Конфигурация Firebase
-        // !!! ВАЖНО: Вы получили ошибку (auth/configuration-not-found). 
-        // Это означает, что эти настройки могут быть неверны ИЛИ Анонимная Аутентификация
-        // не включена в вашем проекте Firebase (Настройки -> Authentication -> Sign-in method -> Anonymous).
         const VERCEL_FIREBASE_CONFIG = {
-            apiKey: "AIzaSyAemRqS-QxuehmOvpKfZaUqEvY0vEANH_o", // Проверьте этот ключ в Настройках проекта
+            apiKey: "AIzaSyAemRqS-QxuehmOvpKfZaUqEvY0vEANH_o",
             authDomain: "mesengergrok.firebaseapp.com",
-            databaseURL: "https://mesengergrok-default-rtdb.firebaseio.com", // НОВАЯ СТРОКА
-            projectId: "mesengergrok", // Проверьте этот ID
+            databaseURL: "https://mesengergrok-default-rtdb.firebaseio.com",
+            projectId: "mesengergrok",
             storageBucket: "mesengergrok.firebasestorage.app",
             messagingSenderId: "610820074834",
             appId: "1:610820074834:web:49c2279bf53f9338f01e8b",
-            measurementId: "G-B0NMTXH6HK" // НОВАЯ СТРОКА
+            measurementId: "G-B0NMTXH6HK"
         };
 
         // Глобальные переменные среды Canvas (если существуют)
@@ -191,6 +189,10 @@
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
+                
+                // *** АКТИВИРОВАТЬ ОТЛАДКУ FIREBASE ***
+                // Выводит сообщения об ошибках разрешений в консоль
+                setLogLevel('Debug'); 
 
                 // Слушатель состояния авторизации
                 onAuthStateChanged(auth, async (user) => {
@@ -201,12 +203,19 @@
                         
                         // Создание/обновление документа пользователя
                         const userDocRef = doc(db, `artifacts/${appId}/public/data/users`, userId);
-                        await setDoc(userDocRef, { 
-                            lastActive: serverTimestamp(),
-                            displayName: `Пользователь ${userId.substring(0, 6)}`
-                        }, { merge: true });
+                        
+                        // Это первая операция, которая может блокироваться правилами безопасности!
+                        try {
+                            await setDoc(userDocRef, { 
+                                lastActive: serverTimestamp(),
+                                displayName: `Пользователь ${userId.substring(0, 6)}`
+                            }, { merge: true });
+                            showApp();
+                        } catch (firestoreError) {
+                            console.error("Firestore Write Error (Check Security Rules):", firestoreError);
+                            setLoadingState('Ошибка. Не удалось записать данные пользователя. Проверьте Правила безопасности.', false);
+                        }
 
-                        showApp();
                     } else {
                         // Попытка входа
                         setLoadingState('Авторизация...');
@@ -218,7 +227,6 @@
                             }
                         } catch (error) {
                             console.error("Firebase Auth Error:", error);
-                            // !!! ЭТА ОШИБКА: (auth/configuration-not-found) !!! 
                             setLoadingState('Ошибка авторизации. Проверьте настройки Firebase (ключи/включена ли Анонимная Auth).', false);
                         }
                     }
@@ -319,7 +327,8 @@
                 setLoadingState(null, false); // Скрыть загрузку
             }, (error) => {
                 console.error("Firestore Snapshot Error:", error);
-                setLoadingState('Ошибка загрузки сообщений. Проверьте правила безопасности.', false);
+                // Это может быть причиной долгой загрузки, если правила блокируют чтение!
+                setLoadingState('Ошибка загрузки сообщений. Проверьте Правила безопасности.', false);
             });
         };
 
