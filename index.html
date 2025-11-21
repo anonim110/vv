@@ -1,398 +1,356 @@
-<!DOCTYPE html>
-<html lang="ru">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Web-мессенджер на Firestore</title>
-    <!-- Подключение Tailwind CSS CDN -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Использование шрифта Inter -->
-    <style>
-        :root {
-            font-family: 'Inter', sans-serif;
-        }
-        /* Стилизация полосы прокрутки для Webkit */
-        ::-webkit-scrollbar {
-            width: 8px;
-        }
-        ::-webkit-scrollbar-thumb {
-            background: #3B82F6; /* Синий цвет */
-            border-radius: 10px;
-        }
-        ::-webkit-scrollbar-track {
-            background: #1F2937; /* Темный цвет */
-        }
-    </style>
-</head>
-<body class="bg-gray-900 text-white h-screen overflow-hidden">
+import React, { useState, useEffect, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, query, orderBy, onSnapshot, addDoc, serverTimestamp, doc, setDoc } from 'firebase/firestore';
+import { Send, User, MessageSquare } from 'lucide-react';
 
-    <div id="app" class="flex h-full">
-        <!-- Загрузочный экран -->
-        <div id="loading-screen" class="absolute inset-0 bg-gray-900 flex items-center justify-center z-50">
-            <div class="text-center">
-                <div id="loading-spinner" class="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500 mx-auto"></div>
-                <p id="loading-message" class="mt-4 text-lg">Подключение к сервисам...</p>
+// === FIREBASE & ENVIRONMENT SETUP ===
+
+// 1. КОНФИГУРАЦИЯ ДЛЯ ВНЕШНЕГО РАЗВЕРТЫВАНИЯ (НАПРИМЕР, VERCEL)
+// !!! ВАЖНО: ЭТИ ПАРАМЕТРЫ БЫЛИ ОБНОВЛЕНЫ ВАШИМИ ДАННЫМИ FIREBASE !!!
+const VERCEL_FIREBASE_CONFIG = {
+    apiKey: "AIzaSyAemRqS-QxuehmOvpKfZaUqEvY0vEANH_o",
+    authDomain: "mesengergrok.firebaseapp.com",
+    databaseURL: "https://mesengergrok-default-rtdb.firebaseio.com", // НОВАЯ СТРОКА
+    projectId: "mesengergrok",
+    storageBucket: "mesengergrok.firebasestorage.app",
+    messagingSenderId: "610820074834",
+    appId: "1:610820074834:web:49c2279bf53f9338f01e8b",
+    measurementId: "G-B0NMTXH6HK" // НОВАЯ СТРОКА
+};
+
+// Переменные из текущей среды Canvas (будут undefined на Vercel)
+const canvasFirebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+const canvasAppId = typeof __app_id !== 'undefined' ? __app_id : 'messenger-app-v1';
+
+// Utility function to deterministically generate a chat ID from two user IDs
+const getChatId = (u1, u2) => [u1, u2].sort().join('___');
+
+// Main App Component
+const App = () => {
+    // Firebase States
+    const [db, setDb] = useState(null);
+    const [auth, setAuth] = useState(null);
+    const [userId, setUserId] = useState(null);
+    const [isAuthReady, setIsAuthReady] = useState(false);
+    const [loadingMessage, setLoadingMessage] = useState('Подключение к сервисам...');
+
+    // Messenger States
+    const [currentChatId, setCurrentChatId] = useState(null);
+    const [recipientId, setRecipientId] = useState('');
+    const [messages, setMessages] = useState([]);
+    const [newMessageText, setNewMessageText] = useState('');
+    const [contacts, setContacts] = useState([]); // List of user IDs you have chatted with
+    const messagesEndRef = useRef(null);
+    const [chatError, setChatError] = useState(null); // НОВЫЙ СТЕЙТ для отображения ошибок чата
+
+    // --- 1. INITIALIZATION AND AUTHENTICATION ---
+    useEffect(() => {
+        // Определяем, какую конфигурацию использовать (Canvas или Vercel/Внешнюю)
+        const configToUse = canvasFirebaseConfig || VERCEL_FIREBASE_CONFIG;
+        const finalAppId = canvasAppId; // Используем appId из Canvas или заглушку
+
+        // Проверка: теперь она должна проходить, так как данные заполнены
+        if (!configToUse.apiKey || configToUse.apiKey.includes('ВАШ_')) {
+            setLoadingMessage('Ошибка: Необходима конфигурация Firebase. Заполните VERCEL_FIREBASE_CONFIG.');
+            return;
+        }
+
+        const app = initializeApp(configToUse);
+        const firestore = getFirestore(app);
+        const firebaseAuth = getAuth(app);
+        setDb(firestore);
+        setAuth(firebaseAuth);
+
+        const unsubscribeAuth = onAuthStateChanged(firebaseAuth, async (user) => {
+            if (user) {
+                setUserId(user.uid);
+                setIsAuthReady(true);
+                setLoadingMessage('Авторизация успешна. Загрузка чатов...');
+                
+                // Путь к коллекции публичных данных (используем finalAppId)
+                const userDocRef = doc(firestore, `artifacts/${finalAppId}/public/data/users`, user.uid);
+                await setDoc(userDocRef, { 
+                    lastActive: serverTimestamp(),
+                    displayName: `Пользователь ${user.uid.substring(0, 6)}`
+                }, { merge: true });
+
+            } else {
+                // Попытка входа: сначала через специальный токен (для Canvas), затем анонимно (для Vercel/других)
+                try {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(firebaseAuth, initialAuthToken);
+                    } else {
+                        // Стандартный анонимный вход для внешнего развертывания
+                        await signInAnonymously(firebaseAuth);
+                    }
+                } catch (error) {
+                    console.error("Firebase Auth Error:", error);
+                    setLoadingMessage('Ошибка авторизации. Проверьте консоль.');
+                }
+            }
+        });
+
+        return () => unsubscribeAuth();
+    }, [canvasFirebaseConfig, initialAuthToken]); // Зависимости обновлены
+
+    // --- 2. CONTACTS / THREADS LISTENER (Simplified) ---
+    // In a real app, this would query a 'threads' collection where the userId is a member.
+    // Here, we'll manually add the current recipient to the contact list if a chat starts.
+    useEffect(() => {
+        if (userId && recipientId && !contacts.includes(recipientId)) {
+            setContacts(prev => [...new Set([...prev, recipientId])]);
+        }
+    }, [userId, recipientId]);
+
+    // --- 3. MESSAGES REAL-TIME LISTENER ---
+    useEffect(() => {
+        const finalAppId = canvasAppId; // Используем appId из Canvas или заглушку
+        
+        if (!isAuthReady || !db || !currentChatId) return;
+
+        setMessages([]);
+        setLoadingMessage('Загрузка сообщений...');
+
+        // Collection path for public, shared chat data
+        const chatPath = `artifacts/${finalAppId}/public/data/threads/${currentChatId}/messages`;
+        const messagesRef = collection(db, chatPath);
+        
+        // Query ordered by timestamp
+        const messagesQuery = query(messagesRef, orderBy('timestamp', 'asc'));
+
+        const unsubscribeMessages = onSnapshot(messagesQuery, (snapshot) => {
+            const newMessages = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data(),
+            }));
+            setMessages(newMessages);
+            setLoadingMessage(null);
+        }, (error) => {
+            console.error("Firestore Snapshot Error:", error);
+            setLoadingMessage('Ошибка загрузки сообщений. Проверьте правила безопасности.');
+        });
+
+        // Cleanup function for the listener
+        return () => unsubscribeMessages();
+    }, [isAuthReady, db, currentChatId]);
+
+    // --- 4. SCROLL TO BOTTOM ---
+    useEffect(() => {
+        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [messages]);
+
+    // --- 5. HANDLERS ---
+    const handleSelectChat = (friendId) => {
+        if (friendId === userId) return; // Cannot chat with self
+        setRecipientId(friendId);
+        setCurrentChatId(getChatId(userId, friendId));
+        setChatError(null); // Очищаем ошибку при выборе нового чата
+    };
+
+    const handleStartNewChat = () => {
+        if (!recipientId || recipientId.trim() === userId) {
+            const errorMessage = recipientId.trim() === userId 
+                ? 'Вы не можете начать чат с самим собой.' 
+                : 'Пожалуйста, введите корректный ID друга.';
+                
+            setChatError(errorMessage);
+            // Автоматически скрываем ошибку через 3 секунды
+            setTimeout(() => setChatError(null), 3000); 
+            // УДАЛЕНО: console.error('Пожалуйста, введите корректный ID друга.');
+            return;
+        }
+        handleSelectChat(recipientId.trim());
+    };
+
+    const handleSendMessage = async (e) => {
+        const finalAppId = canvasAppId;
+        e.preventDefault();
+        if (!newMessageText.trim() || !currentChatId || !db) return;
+
+        const chatPath = `artifacts/${finalAppId}/public/data/threads/${currentChatId}/messages`;
+
+        try {
+            await addDoc(collection(db, chatPath), {
+                senderId: userId,
+                text: newMessageText.trim(),
+                timestamp: serverTimestamp(),
+            });
+            setNewMessageText('');
+        } catch (error) {
+            console.error("Error sending message:", error);
+            // In a real app, show a friendly error message
+        }
+    };
+
+    // --- 6. RENDER COMPONENTS ---
+
+    // Loading/Error Screen
+    if (!isAuthReady || !userId) {
+        return (
+            <div className="flex items-center justify-center min-h-screen bg-gray-900 text-white p-4">
+                <div className="text-center">
+                    <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500 mx-auto"></div>
+                    <p className="mt-4 text-lg">{loadingMessage}</p>
+                </div>
             </div>
-        </div>
+        );
+    }
 
-        <!-- Левая панель (Sidebar) -->
-        <div id="sidebar" class="w-full md:w-1/3 lg:w-1/4 bg-gray-800 border-r border-gray-700 flex flex-col hidden">
-            <div class="p-4 border-b border-gray-700">
-                <h2 class="text-xl font-bold text-white mb-1 flex items-center">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2 text-blue-400"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    const currentRecipient = contacts.find(c => getChatId(userId, c) === currentChatId);
+
+    const ChatSidebar = () => (
+        <div className="w-full md:w-1/3 lg:w-1/4 bg-gray-800 border-r border-gray-700 flex flex-col">
+            <div className="p-4 border-b border-gray-700">
+                <h2 className="text-xl font-bold text-white mb-1 flex items-center">
+                    <MessageSquare className="mr-2 h-5 w-5 text-blue-400" />
                     Мессенджер
                 </h2>
-                <div class="text-sm text-gray-400 truncate">Ваш ID: <span id="user-id-display" class="font-mono text-blue-300 select-all"></span></div>
+                <div className="text-sm text-gray-400 truncate">Ваш ID: <span className="font-mono text-blue-300 select-all">{userId}</span></div>
             </div>
 
-            <!-- Ввод нового чата -->
-            <div class="p-4 bg-gray-900">
-                <div id="chat-error" class="p-2 mb-2 text-sm font-medium text-red-100 bg-red-600 rounded-lg transition duration-300 hidden"></div>
+            {/* New Chat Input */}
+            <div className="p-4 bg-gray-900">
+                {/* Визуальное отображение ошибки чата */}
+                {chatError && (
+                    <div className="p-2 mb-2 text-sm font-medium text-red-100 bg-red-600 rounded-lg transition duration-300 animate-pulse">
+                        {chatError}
+                    </div>
+                )}
                 <input
                     type="text"
-                    id="recipient-id-input"
                     placeholder="ID друга для чата..."
-                    class="w-full p-2 mb-2 bg-gray-700 text-white rounded-lg focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400"
+                    value={recipientId}
+                    onChange={(e) => setRecipientId(e.target.value)}
+                    className="w-full p-2 mb-2 bg-gray-700 text-white rounded-lg focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400"
                 />
                 <button
-                    id="start-chat-button"
-                    class="w-full p-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-md transition duration-150"
+                    onClick={handleStartNewChat}
+                    className="w-full p-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-md transition duration-150"
                 >
-                    <div class='flex items-center justify-center'>
-                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-                        Начать Чат
+                    <div className='flex items-center justify-center'>
+                      <User className="mr-2 h-4 w-4" /> Начать Чат
                     </div>
                 </button>
             </div>
 
-            <!-- Список контактов -->
-            <div class="flex-grow overflow-y-auto">
-                <div class="p-4 text-gray-400 font-semibold uppercase text-xs tracking-wider">
+            {/* Contacts List */}
+            <div className="flex-grow overflow-y-auto">
+                <div className="p-4 text-gray-400 font-semibold uppercase text-xs tracking-wider">
                     Активные чаты
                 </div>
-                <div id="contacts-list">
-                    <!-- Здесь будут контакты -->
-                </div>
-            </div>
-        </div>
-
-        <!-- Правая панель (Chat Window) -->
-        <div id="chat-window" class="flex-grow flex flex-col bg-gray-900 hidden">
-            <!-- Header -->
-            <div id="chat-header" class="p-4 border-b border-gray-700 bg-gray-800 shadow-md">
-                <h3 id="chat-title" class="text-xl font-semibold text-white">Выберите чат</h3>
-            </div>
-
-            <!-- Messages Area -->
-            <div id="messages-area" class="flex-grow overflow-y-auto p-4 space-y-4">
-                <div id="no-chat-selected" class="flex items-center justify-center h-full text-gray-500 text-lg">
-                    <p>Выберите друга в меню слева или введите его ID, чтобы начать переписку.</p>
-                </div>
-                <!-- Здесь будут сообщения -->
-                <div id="messages-end-ref"></div>
-            </div>
-
-            <!-- Input Area -->
-            <div id="input-area" class="p-4 border-t border-gray-700 bg-gray-800 hidden">
-                <form id="message-form" class="flex space-x-3">
-                    <input
-                        type="text"
-                        id="message-input"
-                        placeholder="Введите сообщение..."
-                        class="flex-grow p-3 bg-gray-700 text-white rounded-full focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400 border-none outline-none transition duration-150"
-                    />
-                    <button
-                        type="submit"
-                        id="send-button"
-                        class="bg-blue-600 hover:bg-blue-700 p-3 rounded-full text-white font-semibold shadow-xl transition duration-150 disabled:bg-gray-600 disabled:cursor-not-allowed"
+                {contacts.filter(c => c !== userId).map((contact) => (
+                    <div
+                        key={contact}
+                        onClick={() => handleSelectChat(contact)}
+                        className={`p-3 mx-2 rounded-xl cursor-pointer transition duration-150 ${currentChatId === getChatId(userId, contact) 
+                            ? 'bg-blue-600 shadow-lg text-white font-semibold' 
+                            : 'hover:bg-gray-700 text-gray-300'
+                        }`}
                     >
-                        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2L11 13"/><path d="M22 2L15 22L11 13L2 9L22 2Z"/></svg>
-                    </button>
-                </form>
+                        <div className="font-medium truncate">
+                            {/* Display friend's ID */}
+                            <span className="text-sm">Чат с: {contact.substring(0, 8)}...</span>
+                        </div>
+                        {currentChatId === getChatId(userId, contact) && (
+                            <div className="text-xs opacity-80">Активен</div>
+                        )}
+                    </div>
+                ))}
             </div>
         </div>
-    </div>
+    );
 
-    <!-- MAIN JAVASCRIPT LOGIC -->
-    <script type="module">
-        // Добавлен setLogLevel в импорт
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, addDoc, setDoc, onSnapshot, collection, query, orderBy, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+    const ChatWindow = () => (
+        <div className="flex-grow flex flex-col bg-gray-900">
+            {/* Header */}
+            <div className="p-4 border-b border-gray-700 bg-gray-800 shadow-md">
+                <h3 className="text-xl font-semibold text-white">
+                    {currentChatId ? `Чат с: ${currentRecipient?.substring(0, 10)}...` : 'Выберите чат'}
+                </h3>
+            </div>
 
-        // === ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И НАСТРОЙКИ ===
-        
-        // Конфигурация Firebase
-        const VERCEL_FIREBASE_CONFIG = {
-            apiKey: "AIzaSyAemRqS-QxuehmOvpKfZaUqEvY0vEANH_o",
-            authDomain: "mesengergrok.firebaseapp.com",
-            databaseURL: "https://mesengergrok-default-rtdb.firebaseio.com",
-            projectId: "mesengergrok",
-            storageBucket: "mesengergrok.firebasestorage.app",
-            messagingSenderId: "610820074834",
-            appId: "1:610820074834:web:49c2279bf53f9338f01e8b",
-            measurementId: "G-B0NMTXH6HK"
-        };
-
-        // Глобальные переменные среды Canvas (если существуют)
-        const canvasFirebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : null;
-        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-        const canvasAppId = typeof __app_id !== 'undefined' ? __app_id : 'messenger-app-v1';
-
-        // Определяем, какую конфигурацию использовать
-        const firebaseConfig = canvasFirebaseConfig || VERCEL_FIREBASE_CONFIG;
-        const appId = canvasAppId;
-
-        let db;
-        let auth;
-        let userId = null;
-        let currentChatId = null;
-        let currentRecipientId = '';
-        let contacts = [];
-        let unsubscribeMessages = null; // Для очистки слушателя сообщений
-
-        // === УТИЛИТАРНЫЕ ФУНКЦИИ ===
-        
-        // Детерминированное создание ID чата
-        const getChatId = (u1, u2) => [u1, u2].sort().join('___');
-
-        // Получение DOM-элементов
-        const getEl = (id) => document.getElementById(id);
-
-        // Обновление статуса загрузки
-        const setLoadingState = (message, showSpinner = true) => {
-            getEl('loading-message').textContent = message;
-            getEl('loading-spinner').classList.toggle('hidden', !showSpinner);
-        };
-
-        // Отображение главной части приложения
-        const showApp = () => {
-            getEl('loading-screen').classList.add('hidden');
-            getEl('sidebar').classList.remove('hidden');
-            getEl('chat-window').classList.remove('hidden');
-        };
-        
-        // Визуальное отображение ошибки (вместо alert/console.error)
-        const displayChatError = (message) => {
-            const errorEl = getEl('chat-error');
-            errorEl.textContent = message;
-            errorEl.classList.remove('hidden');
-            setTimeout(() => {
-                errorEl.classList.add('hidden');
-            }, 3000);
-        };
-
-        // === ИНИЦИАЛИЗАЦИЯ И АВТОРИЗАЦИЯ FIREBASE ===
-
-        async function initializeFirebase() {
-            try {
-                const app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-                
-                // *** АКТИВИРОВАТЬ ОТЛАДКУ FIREBASE ***
-                // Выводит сообщения об ошибках разрешений в консоль
-                setLogLevel('Debug'); 
-
-                // Слушатель состояния авторизации
-                onAuthStateChanged(auth, async (user) => {
-                    if (user) {
-                        userId = user.uid;
-                        getEl('user-id-display').textContent = userId;
-                        setLoadingState('Авторизация успешна. Подготовка чата...');
-                        
-                        // Создание/обновление документа пользователя
-                        const userDocRef = doc(db, `artifacts/${appId}/public/data/users`, userId);
-                        
-                        // Это первая операция, которая может блокироваться правилами безопасности!
-                        try {
-                            await setDoc(userDocRef, { 
-                                lastActive: serverTimestamp(),
-                                displayName: `Пользователь ${userId.substring(0, 6)}`
-                            }, { merge: true });
-                            showApp();
-                        } catch (firestoreError) {
-                            console.error("Firestore Write Error (Check Security Rules):", firestoreError);
-                            setLoadingState('Ошибка. Не удалось записать данные пользователя. Проверьте Правила безопасности.', false);
-                        }
-
-                    } else {
-                        // Попытка входа
-                        setLoadingState('Авторизация...');
-                        try {
-                            if (initialAuthToken) {
-                                await signInWithCustomToken(auth, initialAuthToken);
-                            } else {
-                                await signInAnonymously(auth);
-                            }
-                        } catch (error) {
-                            console.error("Firebase Auth Error:", error);
-                            setLoadingState('Ошибка авторизации. Проверьте настройки Firebase (ключи/включена ли Анонимная Auth).', false);
-                        }
-                    }
-                });
-
-            } catch (error) {
-                console.error("Firebase Initialization Error:", error);
-                setLoadingState('Критическая ошибка Firebase. См. консоль.', false);
-            }
-        }
-        
-        // === ЛОГИКА ЧАТА ===
-
-        // Обновление списка контактов в DOM
-        const updateContactsList = () => {
-            const listEl = getEl('contacts-list');
-            listEl.innerHTML = ''; // Очистка
-            
-            contacts.filter(c => c !== userId).forEach(contact => {
-                const chatId = getChatId(userId, contact);
-                const isActive = chatId === currentChatId;
-
-                const contactEl = document.createElement('div');
-                contactEl.className = `p-3 mx-2 rounded-xl cursor-pointer transition duration-150 ${
-                    isActive ? 'bg-blue-600 shadow-lg text-white font-semibold' : 'hover:bg-gray-700 text-gray-300'
-                }`;
-                contactEl.innerHTML = `
-                    <div class="font-medium truncate">
-                        <span class="text-sm">Чат с: ${contact.substring(0, 8)}...</span>
+            {/* Messages Area */}
+            <div className="flex-grow overflow-y-auto p-4 space-y-4">
+                {!currentChatId ? (
+                    <div className="flex items-center justify-center h-full text-gray-500 text-lg">
+                        <p>Выберите друга в меню слева или введите его ID, чтобы начать переписку.</p>
                     </div>
-                    ${isActive ? '<div class="text-xs opacity-80">Активен</div>' : ''}
-                `;
-                contactEl.onclick = () => handleSelectChat(contact);
-                listEl.appendChild(contactEl);
-            });
-        };
+                ) : loadingMessage ? (
+                    <div className="text-center text-gray-500 mt-10">{loadingMessage}</div>
+                ) : (
+                    messages.map((msg) => {
+                        const isMyMessage = msg.senderId === userId;
+                        const time = msg.timestamp?.toDate ? msg.timestamp.toDate().toLocaleTimeString('ru-RU', {hour: '2-digit', minute:'2-digit'}) : '...';
+                        
+                        return (
+                            <div key={msg.id} className={`flex ${isMyMessage ? 'justify-end' : 'justify-start'}`}>
+                                <div className={`max-w-xs sm:max-w-md p-3 rounded-2xl shadow-lg relative ${isMyMessage 
+                                    ? 'bg-blue-600 text-white rounded-br-none' 
+                                    : 'bg-gray-700 text-white rounded-tl-none'
+                                }`}>
+                                    <p className="text-sm break-words">{msg.text}</p>
+                                    <div className={`text-xs mt-1 ${isMyMessage ? 'text-blue-200' : 'text-gray-400'} text-right`}>
+                                        {time}
+                                    </div>
+                                </div>
+                            </div>
+                        );
+                    })
+                )}
+                <div ref={messagesEndRef} />
+            </div>
 
-        // Рендеринг сообщений
-        const renderMessages = (messages) => {
-            const messagesArea = getEl('messages-area');
-            messagesArea.innerHTML = ''; // Очистка
+            {/* Input Area */}
+            {currentChatId && (
+                <div className="p-4 border-t border-gray-700 bg-gray-800">
+                    <form onSubmit={handleSendMessage} className="flex space-x-3">
+                        <input
+                            type="text"
+                            value={newMessageText}
+                            onChange={(e) => setNewMessageText(e.target.value)}
+                            placeholder="Введите сообщение..."
+                            className="flex-grow p-3 bg-gray-700 text-white rounded-full focus:ring-blue-500 focus:border-blue-500 placeholder-gray-400 border-none outline-none transition duration-150"
+                            disabled={!currentChatId}
+                        />
+                        <button
+                            type="submit"
+                            disabled={!currentChatId || !newMessageText.trim()}
+                            className="bg-blue-600 hover:bg-blue-700 p-3 rounded-full text-white font-semibold shadow-xl transition duration-150 disabled:bg-gray-600 disabled:cursor-not-allowed"
+                        >
+                            <Send className="h-5 w-5" />
+                        </button>
+                    </form>
+                </div>
+            )}
+        </div>
+    );
+
+
+    return (
+        <div className="flex h-screen bg-gray-900 text-white font-sans">
+            <style>{`
+                /* Стилизация полосы прокрутки для Webkit */
+                ::-webkit-scrollbar {
+                    width: 8px;
+                }
+                ::-webkit-scrollbar-thumb {
+                    background: #3B82F6; /* Синий цвет Tailwind-blue-500 */
+                    border-radius: 10px;
+                }
+                ::-webkit-scrollbar-track {
+                    background: #1F2937; /* Темный цвет Tailwind-gray-800 */
+                }
+            `}</style>
             
-            if (!currentChatId) {
-                messagesArea.appendChild(getEl('no-chat-selected').cloneNode(true));
-                return;
-            }
+            {/* Sidebar (Contacts) */}
+            <ChatSidebar />
 
-            // Добавление заглушки для прокрутки
-            const messagesEndRef = getEl('messages-end-ref');
-            messagesArea.appendChild(messagesEndRef);
+            {/* Main Chat Window */}
+            <ChatWindow />
+        </div>
+    );
+};
 
-            messages.forEach(msg => {
-                const isMyMessage = msg.senderId === userId;
-                const time = msg.timestamp?.toDate ? msg.timestamp.toDate().toLocaleTimeString('ru-RU', {hour: '2-digit', minute:'2-digit'}) : '...';
-
-                const msgContainer = document.createElement('div');
-                msgContainer.className = `flex ${isMyMessage ? 'justify-end' : 'justify-start'}`;
-                
-                msgContainer.innerHTML = `
-                    <div class="max-w-xs sm:max-w-md p-3 rounded-2xl shadow-lg relative ${isMyMessage 
-                        ? 'bg-blue-600 text-white rounded-br-none' 
-                        : 'bg-gray-700 text-white rounded-tl-none'
-                    }">
-                        <p class="text-sm break-words">${msg.text}</p>
-                        <div class="text-xs mt-1 ${isMyMessage ? 'text-blue-200' : 'text-gray-400'} text-right">
-                            ${time}
-                        </div>
-                    </div>
-                `;
-                messagesArea.insertBefore(msgContainer, messagesEndRef);
-            });
-
-            // Прокрутка вниз
-            messagesEndRef.scrollIntoView({ behavior: 'smooth' });
-        };
-
-        // Запуск слушателя сообщений для выбранного чата
-        const startMessageListener = (chatId) => {
-            if (unsubscribeMessages) {
-                unsubscribeMessages(); // Очистка предыдущего слушателя
-            }
-            
-            getEl('input-area').classList.remove('hidden');
-            getEl('no-chat-selected').classList.add('hidden');
-            
-            setLoadingState('Загрузка сообщений...');
-
-            const chatPath = `artifacts/${appId}/public/data/threads/${chatId}/messages`;
-            const messagesRef = collection(db, chatPath);
-            const messagesQuery = query(messagesRef, orderBy('timestamp', 'asc'));
-
-            unsubscribeMessages = onSnapshot(messagesQuery, (snapshot) => {
-                const newMessages = snapshot.docs.map(doc => ({
-                    id: doc.id,
-                    ...doc.data(),
-                }));
-                renderMessages(newMessages);
-                setLoadingState(null, false); // Скрыть загрузку
-            }, (error) => {
-                console.error("Firestore Snapshot Error:", error);
-                // Это может быть причиной долгой загрузки, если правила блокируют чтение!
-                setLoadingState('Ошибка загрузки сообщений. Проверьте Правила безопасности.', false);
-            });
-        };
-
-        // === ОБРАБОТЧИКИ СОБЫТИЙ ===
-
-        const handleSelectChat = (friendId) => {
-            if (friendId === userId) return;
-            currentRecipientId = friendId;
-            currentChatId = getChatId(userId, friendId);
-            
-            // Добавление контакта (если новый)
-            if (!contacts.includes(friendId)) {
-                contacts.push(friendId);
-            }
-            
-            updateContactsList();
-            getEl('chat-title').textContent = `Чат с: ${friendId.substring(0, 10)}...`;
-            startMessageListener(currentChatId);
-        };
-
-        const handleStartNewChat = () => {
-            const recipientIdInput = getEl('recipient-id-input').value.trim();
-            if (!recipientIdInput || recipientIdInput === userId) {
-                const errorMessage = recipientIdInput === userId 
-                    ? 'Вы не можете начать чат с самим собой.' 
-                    : 'Пожалуйста, введите корректный ID друга.';
-                displayChatError(errorMessage);
-                return;
-            }
-            handleSelectChat(recipientIdInput);
-            getEl('recipient-id-input').value = ''; // Очистка поля ввода
-        };
-
-        const handleSendMessage = async (e) => {
-            e.preventDefault();
-            const messageInput = getEl('message-input');
-            const newMessageText = messageInput.value.trim();
-            
-            if (!newMessageText || !currentChatId || !db) return;
-
-            const chatPath = `artifacts/${appId}/public/data/threads/${currentChatId}/messages`;
-
-            try {
-                await addDoc(collection(db, chatPath), {
-                    senderId: userId,
-                    text: newMessageText,
-                    timestamp: serverTimestamp(),
-                });
-                messageInput.value = ''; // Очистка
-            } catch (error) {
-                console.error("Error sending message:", error);
-                displayChatError('Ошибка отправки сообщения.');
-            }
-        };
-
-        // === НАСТРОЙКА СЛУШАТЕЛЕЙ DOM ===
-
-        window.onload = () => {
-            initializeFirebase();
-            
-            getEl('start-chat-button').onclick = handleStartNewChat;
-            getEl('message-form').onsubmit = handleSendMessage;
-        };
-
-    </script>
-</body>
-</html>
+export default App;
