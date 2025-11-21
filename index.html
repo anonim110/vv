@@ -30,9 +30,19 @@
             <div class="md:w-1/3 p-4 bg-gray-50 border-r border-gray-200 flex flex-col">
                 <h1 class="text-2xl font-bold text-gray-800 mb-6 border-b pb-3">Мессенджер 🚀</h1>
 
-                <!-- Current User Info -->
+                <!-- Current User Info (UPDATED: Added Name Input) -->
                 <div class="bg-blue-100 p-3 rounded-lg mb-6 shadow-inner">
-                    <p class="text-sm font-semibold text-blue-700">Ваш ID (поделитесь с другом):</p>
+                    <p class="text-sm font-semibold text-blue-700">Ваш профиль:</p>
+                    
+                    <!-- Username Input -->
+                    <div class="mt-2">
+                        <label for="username-input" class="block text-xs font-medium text-blue-800 mb-1">Ваше имя:</label>
+                        <input type="text" id="username-input" placeholder="Введите имя (например, Олег)"
+                               class="w-full p-2 border border-blue-300 rounded-lg text-sm focus:ring-blue-500 focus:border-blue-500 transition duration-150">
+                    </div>
+
+                    <!-- User ID Display -->
+                    <p class="text-sm font-semibold text-blue-700 mt-3">Ваш ID (для друга):</p>
                     <div class="flex items-center mt-1">
                         <span id="current-user-id" class="text-xs break-all font-mono text-blue-900 bg-blue-200 px-2 py-1 rounded">Загрузка...</span>
                         <button onclick="copyUserId()" class="ml-2 p-1 bg-blue-500 hover:bg-blue-600 text-white rounded-full text-xs transition">
@@ -111,19 +121,23 @@
         // --- Firebase Imports ---
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged, setPersistence, browserSessionPersistence } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, addDoc, onSnapshot, collection, query, orderBy, serverTimestamp, setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        // UPDATED: Added getDoc and setDoc for profile management
+        import { getFirestore, doc, addDoc, onSnapshot, collection, query, serverTimestamp, setLogLevel, getDoc, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
         // Global state
         let app, db, auth;
         let userId = null;
+        // NEW: Store current user's display name
+        let currentUserName = null; 
         let currentFriendId = null;
+        // NEW: Store current friend's display name
+        let currentFriendName = null; 
         let unsubscribeMessages = null;
 
         // Mandatorily provided global variables
-        // Используем ID приложения Canvas для создания пути к Firestore
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         
-        // === UPDATED: Using user-provided Firebase configuration ===
+        // --- Firebase Configuration ---
         const firebaseConfig = {
             apiKey: "AIzaSyAemRqS-QxuehmOvpKfZaUqEvY0vEANH_o",
             authDomain: "mesengergrok.firebaseapp.com",
@@ -134,13 +148,13 @@
             appId: "1:610820074834:web:49c2279bf53f9338f01e8b",
             measurementId: "G-B0NMTXH6HK"
         };
-        // === END UPDATE ===
 
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
 
         const loadingOverlay = document.getElementById('loading-overlay');
         const messengerContainer = document.getElementById('messenger-container');
         const currentUserIdDisplay = document.getElementById('current-user-id');
+        const usernameInput = document.getElementById('username-input'); // NEW
         const friendIdInput = document.getElementById('friend-id');
         const startChatBtn = document.getElementById('start-chat-btn');
         const messagesContainer = document.getElementById('messages-container');
@@ -156,6 +170,11 @@
             // Public path for collaborative/shared data
             return `/artifacts/${appId}/public/data/chats/${chatId}/messages`;
         };
+        
+        // NEW: Path to user profile document
+        const getUserProfileDocRef = (uid) => {
+            return doc(db, `/artifacts/${appId}/public/data/users/${uid}`);
+        };
 
         // Function to create a unique, stable chatId for two users
         const getChatId = (userA, userB) => {
@@ -166,16 +185,13 @@
 
         // --- Firebase Initialization and Auth ---
         try {
-            // setLogLevel('debug'); // Uncomment for detailed debug logs
+            // setLogLevel('debug'); 
             app = initializeApp(firebaseConfig);
             auth = getAuth(app);
             db = getFirestore(app);
 
-            // Persist session to avoid signing in repeatedly on reload
             await setPersistence(auth, browserSessionPersistence);
-
-            // FIX: Since a custom firebaseConfig is used, the Canvas-provided __initial_auth_token is invalid 
-            // and causes the 'auth/custom-token-mismatch' error. We must use anonymous sign-in instead.
+            
             if (initialAuthToken) {
                  console.warn("Предупреждение: __initial_auth_token игнорируется, так как используется пользовательская конфигурация Firebase. Используется анонимный вход.");
             }
@@ -185,12 +201,59 @@
             console.error("Firebase initialization or sign-in failed:", error);
             loadingOverlay.innerHTML = '<p class="text-red-600">Ошибка инициализации Firebase. Проверьте консоль.</p>';
         }
+        
+        // NEW: Function to manage user profile (get or create)
+        const manageUserProfile = async (uid) => {
+            const userDocRef = getUserProfileDocRef(uid);
+            try {
+                const docSnap = await getDoc(userDocRef);
+                
+                if (docSnap.exists()) {
+                    // Profile exists, load name
+                    const profile = docSnap.data();
+                    currentUserName = profile.name;
+                    usernameInput.value = currentUserName;
+                    console.log("Profile loaded:", currentUserName);
+                } else {
+                    // Profile does not exist, create a default one
+                    const defaultName = `User-${uid.substring(0, 5)}`;
+                    const profileData = { name: defaultName, uid: uid, createdAt: serverTimestamp() };
+                    await setDoc(userDocRef, profileData);
+                    currentUserName = defaultName;
+                    usernameInput.value = currentUserName;
+                    console.log("Default profile created:", currentUserName);
+                }
+            } catch (error) {
+                console.error("Error managing user profile:", error);
+                alertUser('Ошибка при загрузке/создании профиля.', 'red');
+            }
+        };
+
+        // NEW: Function to get a profile by ID
+        const getUserProfile = async (uid) => {
+            const userDocRef = getUserProfileDocRef(uid);
+            try {
+                const docSnap = await getDoc(userDocRef);
+                if (docSnap.exists()) {
+                    return docSnap.data();
+                }
+            } catch (error) {
+                console.error("Error fetching friend profile:", error);
+            }
+            // Fallback to ID if profile not found or error
+            return { name: uid };
+        }
+
 
         // Listener for authentication state changes
-        onAuthStateChanged(auth, (user) => {
+        onAuthStateChanged(auth, async (user) => {
             if (user) {
                 userId = user.uid;
                 currentUserIdDisplay.textContent = userId;
+                
+                // NEW: Manage profile on auth change
+                await manageUserProfile(userId); 
+
                 loadingOverlay.classList.add('hidden');
                 messengerContainer.classList.remove('hidden');
                 console.log("Authenticated with userId:", userId);
@@ -203,18 +266,34 @@
                 }
 
             } else {
-                // Should not happen if signInAnonymously is successful, but good practice
                 userId = null;
                 currentUserIdDisplay.textContent = 'Недоступно';
                 loadingOverlay.innerHTML = '<p class="text-red-600">Ошибка: Пользователь не авторизован.</p>';
             }
         });
+        
+        // NEW: Event listener to save username changes
+        usernameInput.addEventListener('change', async (e) => {
+            const newName = e.target.value.trim();
+            if (!userId || !newName) return;
+
+            const userDocRef = getUserProfileDocRef(userId);
+            try {
+                await setDoc(userDocRef, { name: newName }, { merge: true });
+                currentUserName = newName;
+                alertUser('Имя успешно сохранено!', 'green');
+            } catch (error) {
+                console.error("Error saving username:", error);
+                alertUser('Ошибка сохранения имени. Проверьте правила безопасности.', 'red');
+            }
+        });
+
 
         // --- Firestore Real-time Messaging ---
 
-        const startChat = (friendId) => {
-            if (!userId) {
-                console.error("User not authenticated yet.");
+        const startChat = async (friendId) => { // Made async to fetch friend name
+            if (!userId || !currentUserName) {
+                alertUser('Сначала дождитесь загрузки профиля.', 'red');
                 return;
             }
             if (friendId === userId) {
@@ -236,17 +315,21 @@
             sessionStorage.setItem('currentFriendId', currentFriendId);
             const chatId = getChatId(userId, currentFriendId);
             const chatCollectionRef = collection(db, getChatCollectionPath(chatId));
+            
+            // NEW: Fetch friend's name
+            const friendProfile = await getUserProfile(friendId);
+            currentFriendName = friendProfile.name;
+
 
             // Update UI for the new chat
-            chatTitle.textContent = `Чат с: ${currentFriendId}`;
-            currentFriendDisplay.textContent = currentFriendId;
+            chatTitle.textContent = `Чат с: ${currentFriendName}`; // UPDATED: Use name
+            currentFriendDisplay.textContent = currentFriendName;  // UPDATED: Use name
             activeChatCard.classList.remove('hidden');
             noChatPrompt.classList.add('hidden');
             inputArea.classList.remove('hidden');
             messagesContainer.innerHTML = '<div class="text-center text-gray-500 mt-20">Загрузка сообщений...</div>';
 
             // 1. Setup Real-time Listener for Messages
-            // FIX: Убрали orderBy, чтобы избежать ошибок индексации Firestore. Сортируем на стороне клиента.
             const q = query(chatCollectionRef);
 
             unsubscribeMessages = onSnapshot(q, (snapshot) => {
@@ -256,7 +339,6 @@
                 });
 
                 // Client-side sorting: By timestamp (oldest first).
-                // Messages with pending serverTimestamp (null) are pushed to the end (timestamp.seconds is 0).
                 messagesData.sort((a, b) => {
                     const timeA = a.timestamp?.seconds || 0;
                     const timeB = b.timestamp?.seconds || 0;
@@ -275,7 +357,11 @@
                 messagesContainer.scrollTop = messagesContainer.scrollHeight;
             }, (error) => {
                 console.error("Error listening to messages:", error);
-                messagesContainer.innerHTML = '<div class="text-center text-red-500 mt-20">Ошибка загрузки сообщений.</div>';
+                // The error likely means the rules are still wrong!
+                messagesContainer.innerHTML = `<div class="text-center text-red-500 mt-20">
+                    <p class="font-bold">Ошибка загрузки сообщений. Проверьте правила Firestore!</p>
+                    <p class="text-sm mt-1">Детали ошибки: ${error.code}</p>
+                </div>`;
             });
         };
 
@@ -291,8 +377,7 @@
             const message = {
                 text: text,
                 senderId: userId,
-                // Используем serverTimestamp. При считывании на стороне клиента, пока временная метка
-                // не установлена, она будет null, что обрабатывается в функции сортировки.
+                senderName: currentUserName, // NEW: Include sender name
                 timestamp: serverTimestamp() 
             };
 
@@ -301,7 +386,7 @@
                 messageInput.value = ''; // Clear input on success
             } catch (error) {
                 console.error("Error sending message:", error);
-                alertUser('Ошибка отправки сообщения.', 'red');
+                alertUser('Ошибка отправки сообщения. Проверьте правила!', 'red');
             }
         };
 
@@ -309,15 +394,18 @@
 
         // Creates the styled message bubble HTML
         const createMessageBubble = (text, isSender, timestamp) => {
-            // Преобразование временной метки. Если временная метка еще не установлена сервером (pending), 
-            // используем заглушку '...'
             const time = timestamp ? new Date(timestamp.seconds * 1000).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '...';
             const bgColor = isSender ? 'bg-blue-500 text-white' : 'bg-white text-gray-800 border border-gray-200 shadow-md';
             const alignment = isSender ? 'self-end' : 'self-start';
             const borderRadius = isSender ? 'rounded-b-xl rounded-tl-xl' : 'rounded-b-xl rounded-tr-xl';
+            
+            // NEW: Show a small label with the name for messages from the friend (since they appear on the left)
+            const nameLabel = !isSender && currentFriendName ? 
+                `<span class="text-xs text-gray-600 font-semibold mb-0.5">${currentFriendName}</span>` : '';
 
             return `
                 <div class="flex flex-col ${alignment} max-w-xs sm:max-w-md">
+                    ${nameLabel}
                     <div class="p-3 ${bgColor} ${borderRadius} inline-block break-words">
                         <p class="text-sm">${text}</p>
                         <span class="block text-right text-xs mt-1 opacity-75">${time}</span>
@@ -356,7 +444,6 @@
             const idText = currentUserIdDisplay.textContent;
             if (idText === 'Загрузка...' || idText === 'Недоступно') return;
 
-            // Use execCommand('copy') as navigator.clipboard may not work in iframes
             const tempInput = document.createElement("textarea");
             tempInput.value = idText;
             document.body.appendChild(tempInput);
